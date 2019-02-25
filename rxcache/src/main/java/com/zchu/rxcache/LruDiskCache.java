@@ -13,37 +13,37 @@ import java.lang.reflect.Type;
 /**
  * Created by Z.Chu on 2016/9/10.
  */
-class LruDiskCache {
+public class LruDiskCache {
     private IDiskConverter mDiskConverter;
     private DiskLruCache mDiskLruCache;
 
 
-    LruDiskCache(IDiskConverter diskConverter, File diskDir, int appVersion, long diskMaxSize) {
+    public LruDiskCache(IDiskConverter diskConverter, File diskDir, int appVersion, long diskMaxSize) {
         this.mDiskConverter = diskConverter;
         try {
-            mDiskLruCache = DiskLruCache.open(diskDir, appVersion, 1, diskMaxSize);
+            mDiskLruCache = DiskLruCache.open(diskDir, appVersion, 2, diskMaxSize);
         } catch (IOException e) {
             LogUtils.log(e);
         }
     }
 
-    <T> T load(String key, long existTime, Type type) {
+    public <T> CacheHolder<T> load(String key, Type type) {
         if (mDiskLruCache == null) {
             return null;
         }
         try {
-            DiskLruCache.Editor edit = mDiskLruCache.edit(key);
-            if (edit == null) {
-                return null;
+            DiskLruCache.Snapshot snapshot = mDiskLruCache.get(key);
+            if (snapshot != null) {
+                InputStream source = snapshot.getInputStream(0);
+                T value = mDiskConverter.load(source, type);
+                long timestamp = 0;
+                String string = snapshot.getString(1);
+                if (string != null) {
+                    timestamp = Long.parseLong(string);
+                }
+                snapshot.close();
+                return new CacheHolder<>(value, timestamp);
             }
-            InputStream source = edit.newInputStream(0);
-            T value;
-            if (source != null) {
-                value = mDiskConverter.load(source, type);
-                edit.commit();
-                return value;
-            }
-            edit.abort();
         } catch (IOException e) {
             LogUtils.log(e);
         }
@@ -51,7 +51,7 @@ class LruDiskCache {
     }
 
 
-    <T> boolean save(String key, T value) {
+    public <T> boolean save(String key, T value) {
         if (mDiskLruCache == null) {
             return false;
         }
@@ -59,30 +59,38 @@ class LruDiskCache {
         if (value == null) {
             return remove(key);
         }
+        DiskLruCache.Editor edit = null;
         try {
-            DiskLruCache.Editor edit = mDiskLruCache.edit(key);
-            if (edit == null) {
-                return false;
-            }
+            edit = mDiskLruCache.edit(key);
             OutputStream sink = edit.newOutputStream(0);
-            if (sink != null) {
-                mDiskConverter.writer(sink, value);
-                edit.commit();
-                return true;
-            }
-            edit.abort();
+            mDiskConverter.writer(sink, value);
+            long l = System.currentTimeMillis();
+            edit.set(1, String.valueOf(l));
+            edit.commit();
+            LogUtils.log("save:  value=" + value + " , status=" + true);
+            return true;
         } catch (IOException e) {
             LogUtils.log(e);
+            if (edit != null) {
+                try {
+                    edit.abort();
+                } catch (IOException e1) {
+                    LogUtils.log(e1);
+                }
+            }
+            LogUtils.log("save:  value=" + value + " , status=" + false);
         }
         return false;
     }
 
 
-    boolean containsKey(String key) {
-        try {
-            return mDiskLruCache.get(key) != null;
-        } catch (IOException e) {
-            LogUtils.log(e);
+    public boolean containsKey(String key) {
+        if (mDiskLruCache != null) {
+            try {
+                return mDiskLruCache.get(key) != null;
+            } catch (IOException e) {
+                LogUtils.log(e);
+            }
         }
         return false;
     }
@@ -90,18 +98,36 @@ class LruDiskCache {
     /**
      * 删除缓存
      */
-    final boolean remove(String key) {
-        try {
-            return mDiskLruCache.remove(key);
-        } catch (IOException e) {
-            LogUtils.log(e);
+    public boolean remove(String key) {
+        if (mDiskLruCache != null) {
+            try {
+                return mDiskLruCache.remove(key);
+            } catch (IOException e) {
+                LogUtils.log(e);
+            }
         }
         return false;
     }
 
-    void clear() throws IOException {
-        mDiskLruCache.delete();
+    public void clear() throws IOException {
+        if (mDiskLruCache != null) {
+            deleteContents(mDiskLruCache.getDirectory());
+        }
+    }
 
+    private static void deleteContents(File dir) throws IOException {
+        File[] files = dir.listFiles();
+        if (files == null) {
+            throw new IOException("not a readable directory: " + dir);
+        }
+        for (File file : files) {
+            if (file.isDirectory()) {
+                deleteContents(file);
+            }
+            if (!file.delete()) {
+                throw new IOException("failed to delete file: " + file);
+            }
+        }
     }
 
 
