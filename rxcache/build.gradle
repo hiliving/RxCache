@@ -25,6 +25,11 @@ dependencies {
 }
 
 
+// JitPack Maven
+apply plugin: 'com.github.dcendents.android-maven'
+// Your Group
+group='com.github.hiliving'
+
 version = "2.3.5"
 group = "com.zchu"
 androidArtifact { // 2
